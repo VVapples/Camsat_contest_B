@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tag Layout 3D Visualizer</title>
+    <style>
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #1a1a1a; color: #f0f0f0; overflow: hidden; }
+        #info-panel { position: absolute; top: 10px; left: 10px; padding: 10px; background: rgba(0,0,0,0.5); border-radius: 8px; max-width: 300px; }
+        .file-input-wrapper { margin-bottom: 10px; }
+        label { font-weight: bold; }
+        input[type="file"] { margin-top: 5px; }
+        h3 { margin-top: 0; }
+        p { margin: 5px 0; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div id="info-panel">
+        <h3>Tag Layout Visualizer</h3>
+        <div class="file-input-wrapper">
+            <label for="layout-file">Load Tag Layout Model (.csv)</label><br>
+            <input type="file" id="layout-file" accept=".csv">
+        </div>
+        <p id="status">Status: Waiting for data file...</p>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/papaparse/5.3.0/papaparse.min.js"></script>
+
+    <script>
+        // --- Global Variables ---
+        let scene, camera, renderer, controls;
+        let tagObjectsGroup = new THREE.Group(); // Group to hold all tag models
+        const TAG_VISUAL_SIZE = 0.055; // Should match your actual tag size for scale
+
+        // --- UI Elements ---
+        const layoutFileInput = document.getElementById('layout-file');
+        const statusLabel = document.getElementById('status');
+
+        // --- Initialization ---
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+            scene.add(tagObjectsGroup);
+
+            // Camera setup
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 100);
+            camera.position.set(0.1, 0.2, 0.3);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Controls setup
+            controls = new THREE.OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+            controls.dampingFactor = 0.05;
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+            directionalLight.position.set(1, 2, 1.5);
+            scene.add(directionalLight);
+
+            // Ground grid
+            const gridHelper = new THREE.GridHelper(1, 20, 0x555555, 0x555555);
+            scene.add(gridHelper);
+            
+            // Animation loop
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        // --- Data Loading and Scene Building ---
+        function loadLayoutData() {
+            if (layoutFileInput.files.length > 0) {
+                statusLabel.textContent = "Status: Loading layout data...";
+                Papa.parse(layoutFileInput.files[0], {
+                    header: true,
+                    dynamicTyping: true,
+                    complete: (results) => {
+                        const layoutData = results.data.filter(row => row.tag_id != null);
+                        statusLabel.textContent = `Status: Loaded ${layoutData.length} tags.`;
+                        buildSceneFromLayoutData(layoutData);
+                    }
+                });
+            }
+        }
+
+        function buildSceneFromLayoutData(data) {
+            // Clear previous objects
+            while(tagObjectsGroup.children.length > 0){ 
+                tagObjectsGroup.remove(tagObjectsGroup.children[0]); 
+            }
+
+            let sumX = 0, sumY = 0, sumZ = 0;
+
+            data.forEach(tag => {
+                const tagObject = new THREE.Object3D();
+
+                // Create the visual plane for the tag
+                const planeGeom = new THREE.PlaneGeometry(TAG_VISUAL_SIZE, TAG_VISUAL_SIZE);
+                const planeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+                const planeMesh = new THREE.Mesh(planeGeom, planeMat);
+                tagObject.add(planeMesh);
+
+                // Create an axes helper to show orientation
+                const axesHelper = new THREE.AxesHelper(TAG_VISUAL_SIZE * 0.75);
+                tagObject.add(axesHelper);
+
+                // Set position (swapping Y and Z for a more intuitive "up" direction)
+                const posX = tag.pos_x;
+                const posY = tag.pos_z; // CSV 'z' is our 3D 'y' (height)
+                const posZ = -tag.pos_y; // CSV 'y' is our 3D '-z' (depth)
+                tagObject.position.set(posX, posY, posZ);
+
+                sumX += posX;
+                sumY += posY;
+                sumZ += posZ;
+
+                // Set rotation from the matrix
+                const rotMatrix = new THREE.Matrix4();
+                rotMatrix.set(
+                    tag.R_00, tag.R_01, tag.R_02, 0,
+                    tag.R_10, tag.R_11, tag.R_12, 0,
+                    tag.R_20, tag.R_21, tag.R_22, 0,
+                    0, 0, 0, 1
+                );
+                tagObject.rotation.setFromRotationMatrix(rotMatrix);
+
+                tagObjectsGroup.add(tagObject);
+            });
+
+            // Center the camera pivot point on the average position of the tags
+            if (data.length > 0) {
+                const center = new THREE.Vector3(
+                    sumX / data.length, 
+                    sumY / data.length, 
+                    sumZ / data.length
+                );
+                controls.target.copy(center);
+                camera.lookAt(center);
+            }
+        }
+
+        // --- Event Listeners ---
+        layoutFileInput.addEventListener('change', loadLayoutData);
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // --- Start ---
+        init();
+    </script>
+</body>
+</html>

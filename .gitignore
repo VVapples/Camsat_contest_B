@@ -1,1 +1,12 @@
 *.csv
+*.mp4
+*.pdf
+*.jpg
+*.png
+*.npz
+visualized_videos/
+videos/
+trackerdata/
+tags/
+results/
+Outputs/
